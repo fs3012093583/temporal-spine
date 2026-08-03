@@ -1,0 +1,5 @@
+Temporal-Spine Core
+Copyright 2026 Fan Shun
+
+This distribution contains a provider-agnostic reference implementation of
+the Temporal-Spine conversation-memory access protocol.
