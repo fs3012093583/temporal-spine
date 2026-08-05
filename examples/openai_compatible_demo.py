@@ -17,7 +17,7 @@ history = [
     HistoricalTurn(1, "Give me a dinner idea.", "A lentil curry would be a good option."),
 ]
 
-result = TemporalSpine(client, RunConfig(max_control_rounds=1)).run(
+result = TemporalSpine(client, RunConfig(max_load_rounds=1)).run(
     history,
     "What dinner did you previously suggest?",
 )

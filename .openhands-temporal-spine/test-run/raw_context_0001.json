@@ -1,0 +1,60 @@
+{
+  "context_index": 1,
+  "timestamp": "2026-08-05T09:58:10.104690+00:00",
+  "phase": "after_compression_before_load",
+  "trigger": null,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an OpenHands coding agent with Temporal-Spine memory."
+    },
+    {
+      "role": "user",
+      "content": "[TEMPORAL-SPINE COMPRESSED HISTORY]\nThe JSON below is the source-faithful User-Spine. Historical assistant results and tool records are hidden but recoverable through the load_components tool.\n\n{\n  \"context_type\": \"openhands_temporal_spine_memory\",\n  \"memory_policy\": \"historical user requests stay visible; archived assistant and execution evidence is loadable\",\n  \"user_spine\": [\n    {\n      \"turn_id\": 0,\n      \"user_request\": \"Create a Python parser for the project configuration file.\",\n      \"loadable_components\": {\n        \"assistant_result\": \"result:0\",\n        \"execution_records\": \"trace:0\"\n      }\n    },\n    {\n      \"turn_id\": 1,\n      \"user_request\": \"The parser must preserve comments and report line numbers for errors.\",\n      \"loadable_components\": {\n        \"assistant_result\": \"result:1\",\n        \"execution_records\": \"trace:1\"\n      }\n    }\n  ],\n  \"loading_protocol\": {\n    \"tool\": \"load_components\",\n    \"selection\": [\n      \"selected\",\n      \"remaining\"\n    ],\n    \"rule\": \"load the smallest non-repeated set needed for the current task\"\n  }\n}"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "load_components",
+        "description": "Load selected historical components, or every still-unloaded component.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "selection": {
+              "type": "string",
+              "enum": [
+                "selected",
+                "remaining"
+              ]
+            },
+            "action_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "selection",
+            "action_ids"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "memory": {
+    "archive_event_count": 0,
+    "historical_turn_count": 2,
+    "available_action_ids": [
+      "result:0",
+      "trace:0",
+      "result:1",
+      "trace:1"
+    ],
+    "loaded_action_ids": [],
+    "last_compression": null
+  }
+}

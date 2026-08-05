@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Callable, Mapping, Sequence
 
 from .model import ModelResponse, ToolCall
 
@@ -15,12 +15,16 @@ class OpenAICompatibleClient:
 
     model: str
     base_url: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     api_key_env: str = "OPENAI_API_KEY"
     temperature: float = 0.0
     max_tokens: int = 512
     timeout: int = 120
     thinking: Mapping[str, Any] | None = None
+    request_observer: Callable[[bytes], None] | None = field(
+        default=None,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         self.api_key = self.api_key or os.getenv(self.api_key_env)
@@ -48,9 +52,12 @@ class OpenAICompatibleClient:
             "messages": list(messages),
             "tools": list(tools),
         }
+        encoded_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        if self.request_observer is not None:
+            self.request_observer(encoded_body)
         request = urllib.request.Request(
             self.base_url,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            data=encoded_body,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",

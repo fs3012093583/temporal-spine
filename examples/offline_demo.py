@@ -7,7 +7,7 @@ from temporal_spine import HistoricalTurn, ModelResponse, RunConfig, TemporalSpi
 
 
 class ScriptedModel:
-    """Offline stand-in that makes the protocol visible without calling an API."""
+    """Offline stand-in that makes post-compression loading visible."""
 
     def __init__(self, responses: Sequence[ModelResponse]) -> None:
         self.responses = deque(responses)
@@ -29,14 +29,13 @@ model = ScriptedModel(
         ModelResponse(tool_calls=(ToolCall("c1", "load_components", {
             "selection": "selected", "action_ids": ["result:1"]
         }),)),
-        ModelResponse(tool_calls=(ToolCall("c2", "commit_final_result", {}),)),
-        ModelResponse(tool_calls=(ToolCall("c3", "submit_final_result", {
-            "result": "Choose oatmeal and avoid the peanut-butter toast because of your allergy."
-        }),)),
+        ModelResponse(
+            content="Choose oatmeal and avoid the peanut-butter toast because of your allergy."
+        ),
     ]
 )
 
-result = TemporalSpine(model, RunConfig(max_control_rounds=2)).run(
+result = TemporalSpine(model, RunConfig(max_load_rounds=2)).run(
     history,
     "Which earlier breakfast suggestion is safe for me?",
 )

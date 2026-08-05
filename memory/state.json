@@ -1,0 +1,16 @@
+{
+  "updated_at": "2026-08-05",
+  "branch": "justbook/langgraph-chat-agent",
+  "active_work": "standalone OpenHands SDK integration with Temporal-Spine debugging",
+  "offline_validation": {
+    "compileall": true,
+    "pytest_passed": 29,
+    "api_calls": 0
+  },
+  "live_validation": {
+    "core_wheels_inspected": ["openhands-sdk==1.40.0", "openhands-tools==1.36.1"],
+    "sdk_runtime_installed": false,
+    "status": "pending full optional dependency installation"
+  },
+  "next_action": "Install only the optional OpenHands runtime needed for a live smoke test, then verify the public condenser and tool interfaces."
+}

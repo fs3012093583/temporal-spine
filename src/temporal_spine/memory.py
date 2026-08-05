@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -164,24 +165,37 @@ class ComponentStore:
             ),
         )
 
-    def render_spine(self) -> str:
-        rows: list[str] = []
+    def spine_payload(self) -> list[dict[str, object]]:
+        """Return the always-visible user history as structured JSON-ready data."""
+
+        rows: list[dict[str, object]] = []
         for turn in self.spine_turns:
-            metadata = [f"turn_id={turn.turn_id}"]
+            row: dict[str, object] = {
+                "turn_id": turn.turn_id,
+                "user_request": turn.visible_user_request,
+            }
             if turn.timestamp:
-                metadata.append(f"timestamp={turn.timestamp}")
+                row["timestamp"] = turn.timestamp
+            loadable_components: dict[str, str] = {}
             if turn.user_original_action_id:
-                metadata.append(f"user_original_action_id={turn.user_original_action_id}")
+                loadable_components["user_request_original"] = (
+                    turn.user_original_action_id
+                )
             if turn.result_action_id:
-                metadata.append(f"result_action_id={turn.result_action_id}")
+                loadable_components["assistant_result"] = turn.result_action_id
             if turn.trace_action_id:
-                metadata.append(f"trace_action_id={turn.trace_action_id}")
-            rows.append(
-                "<user-turn " + " ".join(metadata) + ">\n"
-                + turn.visible_user_request
-                + "\n</user-turn>"
-            )
-        return "\n\n".join(rows) if rows else "(empty history)"
+                loadable_components["execution_records"] = turn.trace_action_id
+            if loadable_components:
+                row["loadable_components"] = loadable_components
+            rows.append(row)
+        return rows
+
+    def render_spine(self) -> str:
+        return json.dumps(
+            self.spine_payload(),
+            ensure_ascii=False,
+            indent=2,
+        )
 
     def render_components(self, action_ids: Iterable[str]) -> str:
         rows: list[str] = []
@@ -194,16 +208,3 @@ class ComponentStore:
                 "</memory-component>"
             )
         return "\n\n".join(rows)
-
-    def exact_user_requests(self, turn_ids: Iterable[int]) -> str:
-        by_id = {turn.turn_id: turn for turn in self.turns}
-        ordered = list(dict.fromkeys(turn_ids))
-        missing = [turn_id for turn_id in ordered if turn_id not in by_id]
-        if missing:
-            raise ValueError(f"unknown turn IDs: {missing}")
-        return "\n\n".join(
-            f'<focused-user-turn turn_id="{turn_id}">\n'
-            f"{by_id[turn_id].user_request}\n"
-            "</focused-user-turn>"
-            for turn_id in sorted(ordered)
-        )

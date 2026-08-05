@@ -1,0 +1,21 @@
+{
+  "mode": "offline_test",
+  "compression_verified": true,
+  "loading_verified": true,
+  "before_context": ".openhands-temporal-spine/test-run/raw_context_0001.json",
+  "after_context": ".openhands-temporal-spine/test-run/raw_context_0002.json",
+  "memory": {
+    "archive_event_count": 0,
+    "historical_turn_count": 2,
+    "available_action_ids": [
+      "result:0",
+      "trace:0",
+      "result:1",
+      "trace:1"
+    ],
+    "loaded_action_ids": [
+      "result:0"
+    ],
+    "last_compression": null
+  }
+}
