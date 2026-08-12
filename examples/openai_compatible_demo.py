@@ -17,9 +17,10 @@ history = [
     HistoricalTurn(1, "Give me a dinner idea.", "A lentil curry would be a good option."),
 ]
 
-result = TemporalSpine(client, RunConfig(max_control_rounds=1)).run(
+result = TemporalSpine(client, RunConfig()).run(
     history,
     "What dinner did you previously suggest?",
 )
 print(result.answer)
 print(result.loaded_action_ids)
+print(result.protocol_followed)

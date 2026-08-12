@@ -1,57 +1,64 @@
 # Temporal-Spine Core
 
-Temporal-Spine is a training-free protocol for giving a large language model selective access to
-long conversation history.
+Temporal-Spine Core is the provider-agnostic reference implementation of the paper's current
+**bounded One-Shot MemAddr** algorithm. It gives a large language model selective, source-faithful
+access to long conversation history without training a retriever or generating history summaries.
 
-It keeps historical **user requests** visible in chronological order as a stable `User-Spine`.
-Assistant results, execution records, and exact originals of unusually long user requests are kept
-as source-faithful components. The model loads only the components needed for the current task.
+Historical user requests remain visible in chronological order as a stable `User-Spine`.
+Assistant results, observable execution records, and exact originals of truncated long user
+requests are hidden components addressed as `result:T`, `trace:T`, and `user:T`. For each current
+request, the model either answers directly or loads one bounded batch of components and then
+answers.
 
-> This repository implements text-context orchestration for OpenAI-compatible APIs. It does not
-> claim zero-copy KV-page attachment, GPU KV-cache compression, or latency acceleration.
+> This package implements text-context orchestration for OpenAI-compatible APIs. It does not claim
+> zero-copy KV-page attachment, GPU KV-cache compression, or provider-side prefix-cache hits.
 
-## Core invariants
+## Current protocol
 
-1. **Query-independent User-Spine** — historical user requests are organized before the current
-   query is known. Long requests use a deterministic head-tail preview with a lossless recovery
-   path.
-2. **Model-guided component access** — the model selects legal `user:T`, `result:T`, and `trace:T`
-   components through native tool calls.
-3. **Monotonic completeness** — a component is loaded at most once; later rounds only append new
-   information.
-4. **Source-faithful recovery** — loaded content is copied from immutable historical records rather
-   than regenerated from a summary.
-5. **Stable request envelope** — system prompt, tools, model settings, and thinking settings remain
-   identical across control and answer calls. Phase changes are append-only runtime events.
-6. **Deterministic enforcement** — the runtime validates IDs, removes ambiguity about provenance,
-   orders each batch by historical turn, and rejects premature final submission.
-7. **Optional complete fallback** — when enabled and the underlying model can hold the full history,
-   all still-unloaded components can be appended as a safety endpoint.
+The `memaddr-access-state-v1-one-shot-max5-keep-first-no-fallback` protocol used by this release has
+the following fixed behavior:
 
-## Protocol
+1. **User-Spine is always visible.** Short user requests are retained verbatim. A long request uses
+   a deterministic head-tail preview, while its complete original remains loadable.
+2. **Only two tools exist.** The stable tool array contains `load_components` and
+   `submit_final_result`; there is no focus action, commit action, `remaining` action, or Full
+   History fallback.
+3. **Access is adaptive but one-shot.** The first model call may submit immediately or request one
+   component batch. Once a batch is returned, history access is closed and the second call must
+   submit the result. Normal execution therefore uses one or two model calls; a third call is
+   reserved only for recovery from one invalid protocol action.
+4. **At most five components are loaded.** If a non-conforming provider returns more than five IDs,
+   the runtime keeps the first five requested IDs, records the dropped IDs, and reports the
+   truncation in the tool result. Retained components are presented in historical order.
+5. **Loaded exchanges are source explicit.** For an assistant result or execution record, the tool
+   result presents its already-visible paired user request first and then the unmodified hidden
+   component.
+6. **State is explicit and append-only.** Every request sees the latest `history_access_state`,
+   including model-call count, access-call count, remaining budget, batch limit, and authorized
+   tools. System prompt, tool schema, model settings, and thinking settings remain byte-stable.
+7. **The runtime is authoritative.** It validates IDs and arguments, records actual provenance,
+   checks append-only messages, and marks a natural-language answer captured without
+   `submit_final_result` as protocol non-compliance.
 
 ```text
-fixed system prompt
-+ chronological User-Spine
-+ component catalog
-+ current request
-        |
-        v
-LLM -- load_components([...]) --> runtime appends original components
-        |
-        +-- optionally load another non-repeated batch
-        |
-        `-- commit_final_result
-                    |
-                    v
-          append final_result_authorized
-                    |
-                    v
-          LLM -- submit_final_result(answer)
+stable System + tools + model configuration
+                 |
+       User-Spine + current request
+        + history_access_state(calls_used=0)
+                 |
+                 v
+           first model call
+              /       \
+ submit_final_result   load_components([up to 5 IDs])
+        |                         |
+     answer            runtime appends paired requests,
+                       original components, and state
+                                  |
+                                  v
+                         second model call
+                                  |
+                         submit_final_result
 ```
-
-The complete message sequence is append-only. The final answer call sees the same system prompt,
-tool schema, model, temperature, token limit, and thinking configuration as every control call.
 
 ## Installation
 
@@ -69,82 +76,57 @@ The core package has no third-party runtime dependencies.
 python examples/offline_demo.py
 ```
 
-The example uses a scripted model and makes no network request.
+The offline example uses a scripted model and makes no network request.
 
 ## OpenAI-compatible API example
 
 ```python
-import os
-
-from temporal_spine import (
-    HistoricalTurn,
-    OpenAICompatibleClient,
-    RunConfig,
-    TemporalSpine,
-)
+from temporal_spine import HistoricalTurn, OpenAICompatibleClient, TemporalSpine
 
 client = OpenAICompatibleClient(
-    model="deepseek-chat",
-    base_url="https://api.deepseek.com/chat/completions",
-    api_key_env="DEEPSEEK_API_KEY",
+    model="your-model",
+    base_url="https://provider.example/v1/chat/completions",
+    api_key_env="PROVIDER_API_KEY",
+    temperature=0.0,
     max_tokens=512,
+    thinking={"type": "disabled"},
 )
 
 history = [
     HistoricalTurn(0, "I prefer vegetarian meals.", "I will remember that."),
-    HistoricalTurn(1, "Suggest a dinner.", "Try a lentil curry."),
+    HistoricalTurn(1, "Give me a dinner idea.", "A lentil curry would be a good option."),
 ]
 
-result = TemporalSpine(
-    client,
-    RunConfig(max_control_rounds=1, full_fallback_enabled=True),
-).run(history, "What dinner did you previously suggest?")
+result = TemporalSpine(client).run(
+    history,
+    "What dinner did you previously suggest?",
+    current_date="2026-08-12",
+)
 
 print(result.answer)
 print(result.loaded_action_ids)
+print(result.protocol_followed)
 ```
 
-Set the API key only through the environment:
+Set the key only through the environment. Never commit API keys, `.env` files, private histories,
+or raw provider logs.
 
-```bash
-export DEEPSEEK_API_KEY="..."
-python examples/openai_compatible_demo.py
-```
+## Runtime output
 
-Never commit `.env` or private conversation logs.
+`RunResult` contains:
 
-## One-Shot and Progressive modes
+- `answer`: the final user-facing result;
+- `loaded_action_ids`: the retained components actually loaded, in presentation order;
+- `dropped_action_ids`: overflow IDs that were not loaded;
+- `invalid_action_count`: rejected protocol actions before completion;
+- `protocol_followed`: whether the model used `submit_final_result` as required;
+- `submission_mode`: native submission or audited runtime capture;
+- `calls`: per-call stable-envelope hash, append-only status, message count, and provider usage;
+- `trace`: component provenance, overflow notice, access state, and final-submission event.
 
-The same runtime supports both paper variants:
-
-```python
-# Default one-shot selection followed by one answer call.
-RunConfig(max_control_rounds=1)
-
-# Progressive selection with up to three control decisions.
-RunConfig(max_control_rounds=3)
-
-# Extremely long histories where complete fallback is not feasible.
-RunConfig(max_control_rounds=3, full_fallback_enabled=False)
-```
-
-`max_control_rounds` is a bound, not a requirement to use every round. The model may commit as soon
-as the visible information is sufficient.
-
-## Audit output
-
-`RunResult` exposes:
-
-- final answer;
-- runtime-recorded loaded component IDs;
-- focused user turns;
-- whether complete fallback was used;
-- per-call fixed-request hash and append-only check;
-- provider token usage when returned by the API;
-- a deterministic event trace.
-
-The fixed-request hash audits logical stability. It is not evidence that an API provider actually
-served a prefix-cache hit. Provider-reported cached tokens must be recorded separately.
+The fixed-request hash and append-only check audit **logical cache eligibility**. They are not
+evidence of provider cache hits. Use provider-reported cached-input fields for empirical cache-hit
+measurement.
 
 ## Testing
 
@@ -153,16 +135,16 @@ python -m pip install -e '.[dev]'
 pytest -q
 ```
 
-The tests cover monotonic loading, chronological batch ordering, lossless long-request recovery,
-complete fallback, stable request hashes, append-only messages, duplicate rejection, and phase
-authorization.
+The test suite covers direct submission, one-shot loading, five-component keep-first overflow,
+historical presentation order, paired source layout, long-request recovery, stable request
+envelopes, append-only messages, closed-access enforcement, malformed IDs, empty answers, and
+audited natural-language recovery.
 
 ## Scope
 
 This release intentionally excludes benchmark datasets, model answers, judge outputs, API keys,
-private experiment logs, paper build artifacts, and third-party baseline code. Dataset adapters and
-full reproduction scripts will be released separately after their licenses and evaluation manifests
-are finalized.
+private experiment logs, paper build artifacts, and third-party baseline code. It is the compact
+algorithm implementation, not the complete experimental repository.
 
 ## License
 

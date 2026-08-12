@@ -6,7 +6,7 @@ authors:
   - family-names: "Fan"
     given-names: "Shun"
     email: "fanshun@stu.scu.edu.cn"
-version: 0.1.0
-date-released: 2026-08-03
+version: 0.2.0
+date-released: 2026-08-12
 license: Apache-2.0
 repository-code: "https://github.com/fs3012093583/temporal-spine"

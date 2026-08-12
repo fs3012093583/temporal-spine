@@ -29,17 +29,17 @@ model = ScriptedModel(
         ModelResponse(tool_calls=(ToolCall("c1", "load_components", {
             "selection": "selected", "action_ids": ["result:1"]
         }),)),
-        ModelResponse(tool_calls=(ToolCall("c2", "commit_final_result", {}),)),
-        ModelResponse(tool_calls=(ToolCall("c3", "submit_final_result", {
+        ModelResponse(tool_calls=(ToolCall("c2", "submit_final_result", {
             "result": "Choose oatmeal and avoid the peanut-butter toast because of your allergy."
         }),)),
     ]
 )
 
-result = TemporalSpine(model, RunConfig(max_control_rounds=2)).run(
+result = TemporalSpine(model, RunConfig()).run(
     history,
     "Which earlier breakfast suggestion is safe for me?",
 )
 print(result.answer)
 print("loaded:", result.loaded_action_ids)
+print("protocol followed:", result.protocol_followed)
 print("fixed request hashes:", [call.fixed_request_hash for call in result.calls])

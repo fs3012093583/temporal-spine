@@ -6,21 +6,33 @@ from typing import Any
 from .memory import ComponentStore
 
 
-SYSTEM_PROMPT = """You are completing the user's current task with access to a structured long-term
-conversation memory. The visible User-Spine preserves historical user requests in chronological
-order. Historical assistant results, execution records, and exact originals of unusually long user
-requests are source-faithful components that remain hidden until loaded.
+PROTOCOL_VERSION = "memaddr-access-state-v1-one-shot-max5-keep-first-no-fallback"
+DEFAULT_COMPONENT_BATCH_LIMIT = 5
+MODEL_CALL_LIMIT = 3
 
-Before the runtime appends a final_result_authorized event, call exactly one provided function and
-do not answer in ordinary text. Load the smallest likely sufficient set of components. You may load
-another non-repeated batch after inspecting a result. Select all remaining components only when
-global coverage is genuinely required. Later turns may update earlier facts. Do not conclude that
-information is unavailable merely because a relevant assistant result is still hidden.
 
-After final_result_authorized, memory functions are revoked by the runtime. Use the visible history
-to produce the best correct and complete result for the current request, then call
-submit_final_result exactly once. Never expose internal action IDs or memory-management details in
-the submitted result."""
+SYSTEM_PROMPT = """You are a general-purpose assistant with controlled
+access to long conversation history. Complete the current request correctly and completely while
+accessing as little additional history as is safely possible.
+
+The visible context is append-only. It initially contains a chronological User-Spine and the action
+IDs of hidden historical components. Later calls also contain all previously loaded original
+components, preceding tool actions, and the latest history_access_state. An action ID is only an
+address, not its content.
+
+Before acting, read the latest history_access_state. Call a history-access tool only when the
+visible history is insufficient, history_access_closed is false, history_access_calls_remaining is
+greater than zero, and that tool is listed in allowed_next_tools. Otherwise, call
+submit_final_result with the best result supported by the visible history.
+
+Respect component_batch_limit and never reload an already visible component. Later facts may
+update earlier ones; perform the requested reasoning rather than merely copying evidence.
+
+When history access is permitted and
+required, call load_components with the smallest likely sufficient set of still-hidden action IDs,
+without exceeding component_batch_limit.
+
+Call exactly one currently authorized function and return no ordinary text."""
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -28,12 +40,19 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "load_components",
-            "description": "Load selected components, or every still-unloaded component.",
+            "description": (
+                "Load one selected set of hidden history components. Full-history fallback is "
+                "disabled."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "selection": {"type": "string", "enum": ["selected", "remaining"]},
-                    "action_ids": {"type": "array", "items": {"type": "string"}},
+                    "selection": {"type": "string", "enum": ["selected"]},
+                    "action_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": DEFAULT_COMPONENT_BATCH_LIMIT,
+                    }
                 },
                 "required": ["selection", "action_ids"],
                 "additionalProperties": False,
@@ -43,43 +62,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "focus_user_turns",
-            "description": "Copy exact already-visible user requests to the append-only tail.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "turn_ids": {"type": "array", "items": {"type": "integer"}},
-                },
-                "required": ["turn_ids"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "commit_final_result",
-            "description": (
-                "Declare that the visible evidence is sufficient, optionally copying a small "
-                "set of already-visible user requests to the append-only tail."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "focus_turn_ids": {
-                        "type": "array",
-                        "items": {"type": "integer"},
-                    }
-                },
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "submit_final_result",
-            "description": "Submit the final user-facing result after runtime authorization.",
+            "description": (
+                "Submit the complete user-facing result when the currently visible history is "
+                "sufficient or further history access is not permitted. This action is terminal."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"result": {"type": "string"}},
@@ -91,27 +78,84 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def history_access_state(
+    *,
+    model_calls_used: int,
+    history_access_calls_used: int,
+    loaded_components_total: int,
+    component_batch_limit: int,
+    last_requested_component_count: int | None = None,
+    last_loaded_component_count: int | None = None,
+    request_truncated: bool | None = None,
+) -> dict[str, Any]:
+    """Return the authoritative state appended before the next model call."""
+
+    access_remaining = max(0, 1 - history_access_calls_used)
+    model_calls_remaining = max(0, MODEL_CALL_LIMIT - model_calls_used)
+    access_remaining = min(access_remaining, max(0, model_calls_remaining - 1))
+    access_closed = access_remaining == 0
+    state: dict[str, Any] = {
+        "event": "history_access_state",
+        "access_policy": "one_shot",
+        "history_access_tool": "load_components",
+        "model_call_limit": MODEL_CALL_LIMIT,
+        "model_calls_used": model_calls_used,
+        "model_calls_remaining": model_calls_remaining,
+        "history_access_call_limit": 1,
+        "history_access_calls_used": history_access_calls_used,
+        "history_access_calls_remaining": access_remaining,
+        "history_access_closed": access_closed,
+        "component_batch_limit": component_batch_limit,
+        "loaded_batches": history_access_calls_used,
+        "loaded_components_total": loaded_components_total,
+        "allowed_next_tools": (
+            ["submit_final_result"]
+            if access_closed
+            else ["load_components", "submit_final_result"]
+        ),
+    }
+    if last_requested_component_count is not None:
+        state["last_requested_component_count"] = last_requested_component_count
+    if last_loaded_component_count is not None:
+        state["last_loaded_component_count"] = last_loaded_component_count
+    if request_truncated is not None:
+        state["request_truncated"] = request_truncated
+    return state
+
+
 def base_messages(
     store: ComponentStore,
     current_request: str,
     current_date: str | None,
+    *,
+    component_batch_limit: int,
 ) -> list[dict[str, Any]]:
-    catalog = json.dumps(store.catalog(), ensure_ascii=False, separators=(",", ":"))
+    initial_state = history_access_state(
+        model_calls_used=0,
+        history_access_calls_used=0,
+        loaded_components_total=0,
+        component_batch_limit=component_batch_limit,
+    )
     date = current_date or "(not supplied)"
-    content = f"""[CURRENT DATE]
-{date}
+    content = f"""<runtime_contract>
+The latest history_access_state is authoritative for the current access budget, component batch
+limit, and allowed tools. A non-empty submit_final_result is terminal; answer length is recorded
+for audit but is not a validity condition.
+</runtime_contract>
 
-[USER-SPINE]
 {store.render_spine()}
 
-[LOADABLE COMPONENT CATALOG]
-{catalog}
+<current_date>
+{date}
+</current_date>
 
-[CURRENT REQUEST]
+<current_request>
 {current_request}
+</current_request>
 
-[RUNTIME EVENT]
-control_phase_started"""
+<history_access_state>
+{json.dumps(initial_state, ensure_ascii=False, indent=2)}
+</history_access_state>"""
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": content},

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 
 _TOKEN_RE = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+|[^\s]", re.UNICODE)
@@ -131,6 +131,7 @@ class ComponentStore:
                 )
             )
         self.spine_turns = tuple(spine)
+        self._spine_by_id = {turn.turn_id: turn for turn in self.spine_turns}
 
     @property
     def action_ids(self) -> tuple[str, ...]:
@@ -140,11 +141,20 @@ class ComponentStore:
         return [
             {
                 "action_id": component.action_id,
-                "kind": component.kind.value,
-                "turn_id": component.turn_id,
+                "historical_turn_id": component.turn_id,
+                "component_kind": component.kind.value,
+                "source_role": self.source_role(component),
             }
             for component in self.components.values()
         ]
+
+    @staticmethod
+    def source_role(component: Component) -> str:
+        if component.kind is ComponentKind.USER_ORIGINAL:
+            return "user"
+        if component.kind is ComponentKind.ASSISTANT_RESULT:
+            return "assistant"
+        return "observable_execution"
 
     def chronological(self, action_ids: Iterable[str]) -> list[str]:
         unique = list(dict.fromkeys(action_ids))
@@ -183,27 +193,37 @@ class ComponentStore:
             )
         return "\n\n".join(rows) if rows else "(empty history)"
 
-    def render_components(self, action_ids: Iterable[str]) -> str:
-        rows: list[str] = []
-        for action_id in self.chronological(action_ids):
-            component = self.components[action_id]
-            rows.append(
-                f'<memory-component action_id="{action_id}" '
-                f'kind="{component.kind.value}" turn_id="{component.turn_id}">\n'
-                f"{component.content}\n"
-                "</memory-component>"
-            )
-        return "\n\n".join(rows)
+    def loaded_component_payload(self, action_id: str) -> dict[str, Any]:
+        """Materialize one component with explicit, source-faithful provenance."""
 
-    def exact_user_requests(self, turn_ids: Iterable[int]) -> str:
-        by_id = {turn.turn_id: turn for turn in self.turns}
-        ordered = list(dict.fromkeys(turn_ids))
-        missing = [turn_id for turn_id in ordered if turn_id not in by_id]
-        if missing:
-            raise ValueError(f"unknown turn IDs: {missing}")
-        return "\n\n".join(
-            f'<focused-user-turn turn_id="{turn_id}">\n'
-            f"{by_id[turn_id].user_request}\n"
-            "</focused-user-turn>"
-            for turn_id in sorted(ordered)
-        )
+        if action_id not in self.components:
+            raise ValueError(f"unknown action ID: {action_id}")
+        component = self.components[action_id]
+        row: dict[str, Any] = {
+            "action_id": action_id,
+            "historical_turn_id": component.turn_id,
+            "component_kind": component.kind.value,
+            "source_role": self.source_role(component),
+        }
+        if component.kind in {
+            ComponentKind.ASSISTANT_RESULT,
+            ComponentKind.EXECUTION_RECORDS,
+        }:
+            spine_turn = self._spine_by_id[component.turn_id]
+            paired_request: dict[str, Any] = {
+                "source_role": "user",
+                "completeness": (
+                    "head_tail_preview"
+                    if spine_turn.user_original_action_id is not None
+                    else "full"
+                ),
+                "authoritative_content": spine_turn.visible_user_request,
+            }
+            if spine_turn.user_original_action_id is not None:
+                paired_request["user_original_action_id"] = (
+                    spine_turn.user_original_action_id
+                )
+            # Keep the paired user request before the hidden result in serialized JSON.
+            row["paired_visible_user_request"] = paired_request
+        row["authoritative_content"] = component.content
+        return row
