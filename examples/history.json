@@ -1,0 +1,16 @@
+{
+  "turns": [
+    {
+      "turn_id": 0,
+      "timestamp": "2026-01-10",
+      "user_request": "I prefer vegetarian meals.",
+      "assistant_result": "I will remember that preference."
+    },
+    {
+      "turn_id": 1,
+      "timestamp": "2026-01-11",
+      "user_request": "Give me a dinner idea.",
+      "assistant_result": "Try lentil curry."
+    }
+  ]
+}

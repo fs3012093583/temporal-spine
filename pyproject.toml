@@ -1,27 +1,35 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "temporal-spine-core"
-version = "0.2.0"
-description = "Training-free, LLM-guided access to long conversation history"
+version = "0.3.0"
+description = "MemAddr: User-Spine-guided direct addressing for long-term dialogue memory"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
-  {name = "Fan Shun", email = "fanshun@stu.scu.edu.cn"},
+  {name = "Shun Fan", email = "fanshun@stu.scu.edu.cn"},
+  {name = "Chaolang Hu"},
 ]
 keywords = ["long-term memory", "llm", "conversation", "retrieval", "prompt caching"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/fs3012093583/temporal-spine"
+Paper = "https://doi.org/10.1016/j.knosys.2026.117296"
+
+[project.scripts]
+memaddr = "temporal_spine.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]

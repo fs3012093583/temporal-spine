@@ -1,12 +1,25 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite the repository and the accompanying paper."
-title: "Temporal-Spine Core"
+title: "MemAddr: User-Spine-guided direct addressing"
 type: software
 authors:
   - family-names: "Fan"
     given-names: "Shun"
     email: "fanshun@stu.scu.edu.cn"
-version: 0.2.0
-date-released: 2026-08-12
+  - family-names: "Hu"
+    given-names: "Chaolang"
+version: 0.3.0
+date-released: 2026-11-08
 license: Apache-2.0
 repository-code: "https://github.com/fs3012093583/temporal-spine"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Fan"
+      given-names: "Shun"
+    - family-names: "Hu"
+      given-names: "Chaolang"
+  title: "MemAddr: User-spine-guided direct addressing for long-term dialogue memory"
+  journal: "Knowledge-Based Systems"
+  year: 2026
+  doi: "10.1016/j.knosys.2026.117296"

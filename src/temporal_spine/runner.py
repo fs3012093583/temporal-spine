@@ -22,21 +22,30 @@ class ProtocolError(RuntimeError):
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Configuration of the bounded one-shot direct-address protocol."""
+    """Bound valid access decisions separately from total model calls."""
 
     max_components_per_load: int = DEFAULT_COMPONENT_BATCH_LIMIT
     max_invalid_actions: int = 1
     capture_natural_final: bool = True
     spine_policy: SpinePolicy = field(default_factory=SpinePolicy)
+    max_access_calls: int = 1
+    max_model_calls: int = 3
 
     def __post_init__(self) -> None:
+        for name in ("max_components_per_load", "max_invalid_actions", "max_access_calls", "max_model_calls"):
+            if type(getattr(self, name)) is not int:
+                raise ValueError(f"{name} must be an integer")
         if not 1 <= self.max_components_per_load <= DEFAULT_COMPONENT_BATCH_LIMIT:
             raise ValueError(
                 f"max_components_per_load must be between 1 and "
                 f"{DEFAULT_COMPONENT_BATCH_LIMIT}"
             )
-        if self.max_invalid_actions != 1:
-            raise ValueError("the current protocol fixes max_invalid_actions at 1")
+        if self.max_invalid_actions not in (0, 1):
+            raise ValueError("max_invalid_actions must be 0 or 1")
+        if not 0 <= self.max_access_calls <= 2:
+            raise ValueError("max_access_calls must be 0, 1, or 2")
+        if self.max_model_calls < self.max_access_calls + 1:
+            raise ValueError("reserve at least one model call for final submission")
 
 
 @dataclass(frozen=True)
@@ -78,12 +87,10 @@ def _tool_message(call: ToolCall, content: str) -> dict[str, Any]:
 
 
 class TemporalSpine:
-    """Reference runtime for the paper's current MemAddr One-Shot algorithm.
+    """MemAddr with K=1 (default) or K=2 append-only, deduplicated access.
 
-    One model call may either submit directly or load one bounded component batch. If a batch is
-    loaded, the normal next call submits the result. One additional call is reserved for recovery
-    from a single invalid protocol action. There is no focus action, commit action, repeated history
-    access, or Full History fallback in this protocol version.
+    Invalid-action recovery shares the total model-call limit; it never adds access budget.
+    There is no summarizer, relevance retriever, focus action, or Full History fallback.
     """
 
     def __init__(self, model: ChatModel, config: RunConfig | None = None) -> None:
@@ -102,12 +109,16 @@ class TemporalSpine:
         *,
         current_date: str | None = None,
     ) -> RunResult:
+        if not isinstance(current_request, str) or not current_request.strip():
+            raise ValueError("current_request must be a non-empty string")
         store = ComponentStore(turns, self.config.spine_policy)
         messages = base_messages(
             store,
             current_request,
             current_date,
             component_batch_limit=self.config.max_components_per_load,
+            max_access_calls=self.config.max_access_calls,
+            max_model_calls=self.config.max_model_calls,
         )
         fixed_hash = _canonical_hash(
             {
@@ -124,6 +135,12 @@ class TemporalSpine:
 
         def request(phase: str) -> ModelResponse:
             nonlocal previous_messages
+            current_hash = _canonical_hash({
+                "system": messages[0], "tools": self._tools,
+                "model_parameters": dict(self.model.fixed_parameters),
+            })
+            if current_hash != fixed_hash:
+                raise ProtocolError("fixed model parameters changed during the trajectory")
             append_only = previous_messages is None or (
                 len(messages) >= len(previous_messages)
                 and messages[: len(previous_messages)] == previous_messages
@@ -133,6 +150,11 @@ class TemporalSpine:
             response = self.model.complete(
                 copy.deepcopy(messages), copy.deepcopy(self._tools)
             )
+            if response.finish_reason in {"length", "content_filter"}:
+                raise ProtocolError(
+                    f"model output is incomplete ({response.finish_reason}); "
+                    "increase the output budget or inspect provider settings"
+                )
             calls.append(
                 CallAudit(
                     index=len(calls),
@@ -148,10 +170,21 @@ class TemporalSpine:
 
         history_access_calls = 0
         invalid_actions = 0
-        for _ in range(3):
+        def access_state(**extra: Any) -> dict[str, Any]:
+            return history_access_state(
+                model_calls_used=len(calls),
+                history_access_calls_used=history_access_calls,
+                loaded_components_total=len(loaded),
+                component_batch_limit=self.config.max_components_per_load,
+                max_access_calls=self.config.max_access_calls,
+                max_model_calls=self.config.max_model_calls,
+                **extra,
+            )
+
+        for _ in range(self.config.max_model_calls):
             phase = (
                 "access_or_submit"
-                if history_access_calls == 0
+                if not access_state()["history_access_closed"]
                 else "final_submit"
             )
             if calls:
@@ -193,10 +226,10 @@ class TemporalSpine:
                     rejection_reason = "call exactly one currently authorized function"
                 elif load_call.name != "load_components":
                     rejection_reason = f"unauthorized tool: {load_call.name}"
-                elif history_access_calls:
-                    rejection_reason = (
-                        "history access is closed after the one permitted component batch"
-                    )
+                elif history_access_calls >= self.config.max_access_calls or len(calls) >= self.config.max_model_calls:
+                    rejection_reason = "history access is closed; submit the final result"
+                elif not isinstance(load_call.arguments, Mapping) or set(load_call.arguments) != {"selection", "action_ids"}:
+                    rejection_reason = "load_components requires only selection and action_ids"
                 else:
                     selection = load_call.arguments.get("selection")
                     requested = load_call.arguments.get("action_ids")
@@ -208,43 +241,38 @@ class TemporalSpine:
                         rejection_reason = (
                             "action_ids must be a non-empty list of strings"
                         )
-                    elif len(requested) != len(set(requested)):
-                        rejection_reason = "action_ids must be distinct"
                     else:
                         retained = requested[: self.config.max_components_per_load]
-                        dropped.extend(
-                            requested[self.config.max_components_per_load :]
-                        )
+                        overflow = requested[self.config.max_components_per_load :]
+                        dropped.extend(overflow)
                         try:
+                            if len(retained) != len(set(retained)):
+                                raise ValueError("retained action_ids must be distinct")
                             batch_ids = store.chronological(retained)
                         except ValueError as exc:
                             rejection_reason = str(exc)
                         else:
+                            repeated = [action_id for action_id in batch_ids if action_id in loaded]
+                            batch_ids = [action_id for action_id in batch_ids if action_id not in loaded]
                             loaded.extend(batch_ids)
-                            history_access_calls = 1
-                            state = history_access_state(
-                                model_calls_used=len(calls),
-                                history_access_calls_used=history_access_calls,
-                                loaded_components_total=len(loaded),
-                                component_batch_limit=(
-                                    self.config.max_components_per_load
-                                ),
+                            history_access_calls += 1
+                            state = access_state(
                                 last_requested_component_count=len(requested),
                                 last_loaded_component_count=len(batch_ids),
-                                request_truncated=bool(dropped),
+                                request_truncated=bool(overflow),
                             )
                             tool_payload: dict[str, Any] = {
                                 "event": "loaded_components",
                                 "status": "success",
-                                "batch_index": 1,
+                                "batch_index": history_access_calls,
                                 "scope": "selected",
-                                "already_loaded_action_ids": [],
+                                "already_loaded_action_ids": repeated,
                                 "components": [
                                     store.loaded_component_payload(action_id)
                                     for action_id in batch_ids
                                 ],
                             }
-                            if dropped:
+                            if overflow:
                                 tool_payload["load_limit_notice"] = {
                                     "status": "request_truncated",
                                     "requested_count": len(requested),
@@ -252,7 +280,7 @@ class TemporalSpine:
                                         self.config.max_components_per_load
                                     ),
                                     "retained_requested_action_ids": retained,
-                                    "dropped_action_ids": dropped,
+                                    "dropped_action_ids": overflow,
                                     "message": (
                                         "Only the first requested action IDs up to the "
                                         "per-load limit were processed; the remaining IDs "
@@ -274,7 +302,8 @@ class TemporalSpine:
                                     "event": "components_loaded",
                                     "requested_action_ids": list(requested),
                                     "loaded_action_ids": list(batch_ids),
-                                    "dropped_action_ids": list(dropped),
+                                    "already_loaded_action_ids": repeated,
+                                    "dropped_action_ids": list(overflow),
                                     "tool_result": tool_payload,
                                 }
                             )
@@ -289,14 +318,9 @@ class TemporalSpine:
                     "invalid_action_count": invalid_actions,
                 }
             )
-            if invalid_actions > self.config.max_invalid_actions or len(calls) >= 3:
+            if invalid_actions > self.config.max_invalid_actions or len(calls) >= self.config.max_model_calls:
                 raise ProtocolError(rejection_reason)
-            state = history_access_state(
-                model_calls_used=len(calls),
-                history_access_calls_used=history_access_calls,
-                loaded_components_total=len(loaded),
-                component_batch_limit=self.config.max_components_per_load,
-            )
+            state = access_state()
             rejection_payload = json.dumps(
                 {
                     "event": "protocol_action_rejected",
@@ -323,6 +347,8 @@ class TemporalSpine:
             call = response.tool_calls[0]
             if call.name != "submit_final_result":
                 return None
+            if not isinstance(call.arguments, Mapping) or set(call.arguments) != {"result"}:
+                raise ProtocolError("submit_final_result requires only result")
             result = call.arguments.get("result")
             if not isinstance(result, str) or not result.strip():
                 raise ProtocolError("submit_final_result requires a non-empty result")

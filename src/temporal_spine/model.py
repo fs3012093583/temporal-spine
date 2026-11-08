@@ -20,9 +20,13 @@ class ModelResponse:
     content: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
     usage: Mapping[str, int] = field(default_factory=dict)
+    finish_reason: str | None = None
+    reasoning_content: str | None = None
 
     def as_assistant_message(self) -> dict[str, Any]:
         message: dict[str, Any] = {"role": "assistant", "content": self.content}
+        if self.reasoning_content is not None:
+            message["reasoning_content"] = self.reasoning_content
         if self.tool_calls:
             message["tool_calls"] = [
                 {

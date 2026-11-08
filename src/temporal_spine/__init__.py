@@ -1,6 +1,6 @@
-"""Provider-agnostic Temporal-Spine reference implementation."""
+"""MemAddr: provider-agnostic User-Spine and direct original-record access."""
 
-from .client import OpenAICompatibleClient
+from .client import OpenAICompatibleClient, ProviderError
 from .memory import ComponentStore, HistoricalTurn, SpinePolicy
 from .model import ModelResponse, ToolCall
 from .prompt import PROTOCOL_VERSION
@@ -13,6 +13,7 @@ __all__ = [
     "OpenAICompatibleClient",
     "PROTOCOL_VERSION",
     "ProtocolError",
+    "ProviderError",
     "RunConfig",
     "RunResult",
     "SpinePolicy",

@@ -4,12 +4,10 @@ from temporal_spine import HistoricalTurn, OpenAICompatibleClient, RunConfig, Te
 
 
 client = OpenAICompatibleClient(
-    model=os.environ.get("MODEL_NAME", "deepseek-chat"),
-    base_url=os.environ.get(
-        "CHAT_COMPLETIONS_URL", "https://api.deepseek.com/chat/completions"
-    ),
-    api_key_env=os.environ.get("API_KEY_ENV", "DEEPSEEK_API_KEY"),
-    max_tokens=512,
+    model=os.environ["MEMADDR_MODEL"],
+    base_url=os.environ["MEMADDR_BASE_URL"],
+    api_key_env="OPENAI_API_KEY",
+    max_tokens=8192,
 )
 
 history = [

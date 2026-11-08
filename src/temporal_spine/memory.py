@@ -19,16 +19,36 @@ class HistoricalTurn:
     execution_records: tuple[str, ...] = ()
     timestamp: str | None = None
 
+    def __post_init__(self) -> None:
+        if type(self.turn_id) is not int or self.turn_id < 0:
+            raise ValueError("turn_id must be a non-negative integer")
+        if not isinstance(self.user_request, str) or not isinstance(self.assistant_result, str):
+            raise ValueError("user_request and assistant_result must be strings")
+        if not isinstance(self.execution_records, (tuple, list)) or not all(
+            isinstance(record, str) for record in self.execution_records
+        ):
+            raise ValueError("execution_records must be a sequence of strings")
+        object.__setattr__(self, "execution_records", tuple(self.execution_records))
+        if self.timestamp is not None and not isinstance(self.timestamp, str):
+            raise ValueError("timestamp must be a string or None")
+
 
 @dataclass(frozen=True)
 class SpinePolicy:
-    """Query-independent policy for unusually long historical user requests."""
+    """Query-independent preview limits in deterministic spans, not API tokens.
+
+    The ``*_tokens`` names are retained for compatibility with the original release.
+    """
 
     max_user_tokens: int = 512
     head_tokens: int = 256
     tail_tokens: int = 256
 
     def __post_init__(self) -> None:
+        if any(type(value) is not int for value in (
+            self.max_user_tokens, self.head_tokens, self.tail_tokens
+        )):
+            raise ValueError("preview limits must be integers")
         if self.max_user_tokens <= 0:
             raise ValueError("max_user_tokens must be positive")
         if self.head_tokens < 0 or self.tail_tokens < 0:
@@ -76,7 +96,7 @@ def head_tail_preview(text: str, policy: SpinePolicy) -> tuple[str, bool]:
     head_end = spans[policy.head_tokens - 1][1] if policy.head_tokens else 0
     tail_start = spans[-policy.tail_tokens][0] if policy.tail_tokens else len(text)
     omitted = len(spans) - policy.head_tokens - policy.tail_tokens
-    marker = f"\n... <{omitted} approximate tokens omitted; original is loadable> ...\n"
+    marker = f"\n... <{omitted} spans omitted; original is loadable> ...\n"
     return text[:head_end] + marker + text[tail_start:], True
 
 

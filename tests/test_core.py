@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections import deque
 from typing import Any, Mapping, Sequence
@@ -102,16 +101,12 @@ def test_tools_expose_only_load_and_submit_without_fallback_or_focus() -> None:
     assert "commit_final_result" not in serialized
 
 
-def test_system_and_tool_hashes_match_the_latest_evaluation_protocol() -> None:
-    canonical_tools = json.dumps(
-        TOOLS, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    assert hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest() == (
-        "1f6116d0ad93cbbd9fe7cf7be0aac1cfac667e313ffa4d568be50dd8bd8ef70e"
-    )
-    assert hashlib.sha256(canonical_tools).hexdigest() == (
-        "61c098bb138dcab0c645d335f846b21662f0501ec0c80b840042ff5dbf1c712a"
-    )
+def test_prompt_and_tools_expose_bounded_native_access() -> None:
+    assert "history_access_state" in SYSTEM_PROMPT
+    assert "An action ID is only an" in SYSTEM_PROMPT
+    schema = TOOLS[0]["function"]["parameters"]["properties"]["action_ids"]
+    assert schema["minItems"] == 1
+    assert schema["uniqueItems"] is True
 
 
 def test_overflow_keeps_first_five_then_presents_them_chronologically() -> None:

@@ -6,7 +6,7 @@ from typing import Any
 from .memory import ComponentStore
 
 
-PROTOCOL_VERSION = "memaddr-access-state-v1-one-shot-max5-keep-first-no-fallback"
+PROTOCOL_VERSION = "memaddr-bounded-access-v2-keep-first-no-fallback"
 DEFAULT_COMPONENT_BATCH_LIMIT = 5
 MODEL_CALL_LIMIT = 3
 
@@ -51,6 +51,8 @@ TOOLS: list[dict[str, Any]] = [
                     "action_ids": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "minItems": 1,
+                        "uniqueItems": True,
                         "maxItems": DEFAULT_COMPONENT_BATCH_LIMIT,
                     }
                 },
@@ -84,24 +86,26 @@ def history_access_state(
     history_access_calls_used: int,
     loaded_components_total: int,
     component_batch_limit: int,
+    max_access_calls: int = 1,
+    max_model_calls: int = MODEL_CALL_LIMIT,
     last_requested_component_count: int | None = None,
     last_loaded_component_count: int | None = None,
     request_truncated: bool | None = None,
 ) -> dict[str, Any]:
     """Return the authoritative state appended before the next model call."""
 
-    access_remaining = max(0, 1 - history_access_calls_used)
-    model_calls_remaining = max(0, MODEL_CALL_LIMIT - model_calls_used)
+    access_remaining = max(0, max_access_calls - history_access_calls_used)
+    model_calls_remaining = max(0, max_model_calls - model_calls_used)
     access_remaining = min(access_remaining, max(0, model_calls_remaining - 1))
     access_closed = access_remaining == 0
     state: dict[str, Any] = {
         "event": "history_access_state",
-        "access_policy": "one_shot",
+        "access_policy": "one_shot" if max_access_calls == 1 else "bounded",
         "history_access_tool": "load_components",
-        "model_call_limit": MODEL_CALL_LIMIT,
+        "model_call_limit": max_model_calls,
         "model_calls_used": model_calls_used,
         "model_calls_remaining": model_calls_remaining,
-        "history_access_call_limit": 1,
+        "history_access_call_limit": max_access_calls,
         "history_access_calls_used": history_access_calls_used,
         "history_access_calls_remaining": access_remaining,
         "history_access_closed": access_closed,
@@ -129,12 +133,16 @@ def base_messages(
     current_date: str | None,
     *,
     component_batch_limit: int,
+    max_access_calls: int = 1,
+    max_model_calls: int = MODEL_CALL_LIMIT,
 ) -> list[dict[str, Any]]:
     initial_state = history_access_state(
         model_calls_used=0,
         history_access_calls_used=0,
         loaded_components_total=0,
         component_batch_limit=component_batch_limit,
+        max_access_calls=max_access_calls,
+        max_model_calls=max_model_calls,
     )
     date = current_date or "(not supplied)"
     content = f"""<runtime_contract>
